@@ -128,6 +128,16 @@ void initPBO() {
 
 }
 
+void initImgui() {
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO(); (void)io;
+    ImGui::StyleColorsDark();
+    
+    ImGui_ImplGlfw_InitForOpenGL(window, true);
+    ImGui_ImplOpenGL3_Init();
+}
+
 void errorCallback(int error, const char* description) {
     fprintf(stderr, "%s\n", description);
 }
@@ -138,12 +148,14 @@ bool init() {
     if (!glfwInit()) {
         exit(EXIT_FAILURE);
     }
+    
 
     window = glfwCreateWindow(width, height, "CIS 565 Path Tracer", NULL, NULL);
     if (!window) {
         glfwTerminate();
         return false;
     }
+    glEnable(GL_BLEND);
     glfwMakeContextCurrent(window);
     glfwSetKeyCallback(window, keyCallback);
     glfwSetCursorPosCallback(window, mousePositionCallback);
@@ -161,6 +173,8 @@ bool init() {
     initCuda();
     initPBO();
     GLuint passthroughProgram = initShader();
+    initImgui();
+
 
     glUseProgram(passthroughProgram);
     glActiveTexture(GL_TEXTURE0);
@@ -172,19 +186,38 @@ void mainLoop() {
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
         runCuda();
-
+        
         string title = "CIS565 Path Tracer | " + utilityCore::convertIntToString(iteration) + " Iterations";
         glfwSetWindowTitle(window, title.c_str());
 
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo);
         glBindTexture(GL_TEXTURE_2D, displayImage);
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        glClearColor(0.2f, 0.3f, 0.4f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
+
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
 
         // VAO, shader program, and texture already bound
         glDrawElements(GL_TRIANGLES, 6,  GL_UNSIGNED_SHORT, 0);
+
+        ImGui::Begin("ImGUI Window");
+        ImGui::Text("ImGUI text");
+        ImGui::Button("Hello!");
+        ImGui::End();
+
+        ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
         glfwSwapBuffers(window);
     }
+
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
+
     glfwDestroyWindow(window);
     glfwTerminate();
 }

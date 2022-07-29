@@ -41,6 +41,20 @@ glm::vec3 calculateRandomDirectionInHemisphere(
         + sin(around) * over * perpendicularDirection2;
 }
 
+__host__ __device__ glm::vec3 calculateRandomDirectionInUnitBall (glm::vec3 normal, thrust::default_random_engine& rng) {
+    thrust::uniform_real_distribution<float> u(-1, 1);
+    glm::vec3 rndPoint;
+    while (true) {
+        rndPoint.x = u(rng);
+        rndPoint.y = u(rng);
+        rndPoint.z = u(rng);
+        if (rndPoint.x * rndPoint.x + rndPoint.y * rndPoint.y + rndPoint.z * rndPoint.z < 1) {
+            rndPoint += normal;
+            return rndPoint;
+        }
+    }
+}
+
 /**
  * Scatter a ray with some probabilities according to the material properties.
  * For example, a diffuse surface scatters in a cosine-weighted hemisphere.
@@ -73,7 +87,26 @@ void scatterRay(
         glm::vec3 normal,
         const Material &m,
         thrust::default_random_engine &rng) {
-    // TODO: implement this.
-    // A basic implementation of pure-diffuse shading will just call the
-    // calculateRandomDirectionInHemisphere defined above.
+    thrust::uniform_real_distribution<float> u01(0, 1);
+    float roll = u01(rng);
+
+    if (roll < m.hasReflective) {
+        //reflection
+        pathSegment.color *= m.specular.color;
+        pathSegment.ray.origin = intersect + 0.01f * normal;
+        pathSegment.ray.direction = glm::normalize(glm::reflect(pathSegment.ray.direction, normal));
+    }
+    else if (roll < m.hasRefractive) {
+        //refraction
+        
+    }
+    else {
+        pathSegment.color *= m.color;
+        pathSegment.ray.origin = intersect + 0.01f * normal;
+        pathSegment.ray.direction = glm::normalize(calculateRandomDirectionInUnitBall(normal, rng));
+    }
+
+
+    
+
 }
