@@ -29,7 +29,6 @@ int height;
 //-------------------------------
 //-------------MAIN--------------
 //-------------------------------
-
 int main(int argc, char** argv) {
     startTimeString = currentTimeString();
 
@@ -42,6 +41,7 @@ int main(int argc, char** argv) {
 
     // Load scene file
     scene = new Scene(sceneFile);
+    scene->loadObj("./objects/diamond.obj");
 
     // Set up camera stuff from loaded path tracer settings
     iteration = 0;

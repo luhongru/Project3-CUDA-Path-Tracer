@@ -20,7 +20,10 @@ public:
     Scene(string filename);
     ~Scene();
 
+    int loadObj(string filename);
     std::vector<Geom> geoms;
     std::vector<Material> materials;
+    std::vector<std::vector<Triangle>> tris;
+    std::vector<Geom> objects;
     RenderState state;
 };
