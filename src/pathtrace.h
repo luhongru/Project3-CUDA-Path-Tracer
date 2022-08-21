@@ -2,7 +2,6 @@
 
 #include <vector>
 #include "scene.h"
-#include "kdTree.h"
 
 void pathtraceInit(Scene *scene);
 void pathtraceFree();

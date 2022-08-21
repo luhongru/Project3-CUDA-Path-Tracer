@@ -11,15 +11,13 @@
 #include <thrust/partition.h>
 
 #include "sceneStructs.h"
-#include "scene.h"
 #include "glm/glm.hpp"
 #include "glm/gtx/norm.hpp"
 #include "utilities.h"
-#include "pathtrace.h"
 
 
 constexpr int BLOCK_SIZE_1D = 128;
-constexpr int TRI_COUNT_UPPER_BOUND = 20;
+
 
 enum Axis {
 	X_AXIS,
@@ -36,9 +34,7 @@ enum AABBFace {
 	BOTTOM,
 };
 
-struct BoundingBox {
-	glm::vec3 min, max;
-};
+
 
 struct KdTreeNode {
 	//tree structure
@@ -60,16 +56,17 @@ struct KdTreeNode {
 };
 
 class KdTree {
-	std::vector<Triangle> tris;
-	std::vector<KdTreeNode> treeNodes;
-	Geom geom;
-
+	
 	void readTriData(std::string filename, std::vector<Triangle>& tri_data);
 	void setTreeGeom();
 	void constructTree(std::vector<Triangle>& triDataArray);
 	void connectRopes();
 	void connectRopeRec(int nodeIdx, int neighbor_node_indices[6]);
 public:
+	std::vector<Triangle> tris;
+	std::vector<KdTreeNode> treeNodes;
+	Geom geom;
+
 	KdTree(std::string filename);
 	~KdTree();
 };

@@ -7,23 +7,22 @@
 #include "glm/glm.hpp"
 #include "utilities.h"
 #include "sceneStructs.h"
+#include "kdTree.h"
 
 using namespace std;
-
 class Scene {
 private:
-    ifstream fp_in;
-    int loadMaterial(string materialid);
-    int loadGeom(string objectid);
+    std::ifstream fp_in;
+    int loadMaterial(std::string materialid);
+    int loadGeom(std::string objectid);
     int loadCamera();
 public:
-    Scene(string filename);
-    ~Scene();
+    Scene(std::string filename);
+    ~Scene() {}
 
-    int loadObj(string filename);
+    int loadObj(std::string filename);
     std::vector<Geom> geoms;
     std::vector<Material> materials;
-    std::vector<std::vector<Triangle>> tris;
-    std::vector<Geom> objects;
     RenderState state;
+    KdTree * kdTree;
 };

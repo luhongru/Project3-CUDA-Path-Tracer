@@ -24,10 +24,9 @@ __host__ __device__ float floatMin(float x, float y) {
 	else
 		return y;
 }
-__host__ __device__ bool intersectAABB(Ray r, KdTreeNode& n, float& t_entry, float& t_exit) {
+__host__ __device__ bool intersectAABB(Ray r, BoundingBox & bbox, float& t_entry, float& t_exit) {
 	auto ray_o = r.origin;
 	auto ray_dir = r.direction;
-	auto bbox = n.bb;
 	glm::vec3 dirfrac(1.0f / ray_dir.x, 1.0f / ray_dir.y, 1.0f / ray_dir.z);
 
 	float t1 = (bbox.min.x - ray_o.x) * dirfrac.x;
@@ -37,21 +36,19 @@ __host__ __device__ bool intersectAABB(Ray r, KdTreeNode& n, float& t_entry, flo
 	float t5 = (bbox.min.z - ray_o.z) * dirfrac.z;
 	float t6 = (bbox.max.z - ray_o.z) * dirfrac.z;
 
-	float tmin = floatMax(floatMax(floatMin(t1, t2), floatMin(t3, t4)), floatMin(t5, t6));
-	float tmax = floatMin(floatMin(floatMax(t1, t2), floatMax(t3, t4)), floatMax(t5, t6));
+	t_entry = floatMax(floatMax(floatMin(t1, t2), floatMin(t3, t4)), floatMin(t5, t6));
+	t_exit = floatMin(floatMin(floatMax(t1, t2), floatMax(t3, t4)), floatMax(t5, t6));
 
 	// If tmax < 0, ray intersects AABB, but entire AABB is behind ray, so reject.
-	if (tmax < 0.0f) {
+	if (t_exit < 0.0f) {
 		return false;
 	}
 
 	// If tmin > tmax, ray does not intersect AABB.
-	if (tmin > tmax) {
+	if (t_entry > t_exit) {
 		return false;
 	}
 
-	t_entry = tmin;
-	t_exit = tmax;
 	return true;
 }
 
@@ -74,6 +71,29 @@ __host__ __device__ bool onLeft(glm::vec3 p, KdTreeNode& node) {
 __host__ __device__ int getNeighborIdx(glm::vec3 p, KdTreeNode& node) {
 	const float GPU_KD_TREE_EPSILON = 0.00001f;
 
+	float faceDis[6];
+	faceDis[LEFT] = fabsf(p.x - node.bb.min.x);
+	faceDis[TOP] = fabsf(p.z - node.bb.max.z);
+	faceDis[RIGHT] = fabsf(p.x - node.bb.max.x);
+	faceDis[BOTTOM] = fabsf(p.z - node.bb.min.z);
+	faceDis[FRONT] = fabsf(p.y - node.bb.max.y);
+	faceDis[BACK] = fabsf(p.y - node.bb.min.y);
+
+	for (int i = 0; i < 6; i++) {
+		bool flag = true;
+		for (int j = 0; j < 6; j++) {
+			if (faceDis[i] > faceDis[j]) {
+				flag = false;
+				break;
+			}
+		}
+		if (flag)
+			return node.neighbor_node_indices[i];
+	}
+
+	return -1;
+	printf("ERROR\n");
+	/*
 	// Check left face.
 	if (fabsf(p.x - node.bb.min.x) < GPU_KD_TREE_EPSILON) {
 		return node.neighbor_node_indices[LEFT];
@@ -101,5 +121,5 @@ __host__ __device__ int getNeighborIdx(glm::vec3 p, KdTreeNode& node) {
 	// p should be a point on one of the faces of this node's bounding box, but in this case, it isn't.
 	else {
 		return -1;
-	}
+	}*/
 }

@@ -14,6 +14,10 @@ enum GeomType {
     OBJECT,
 };
 
+struct BoundingBox {
+    glm::vec3 min, max;
+};
+
 struct Ray {
     glm::vec3 origin;
     glm::vec3 direction;
@@ -34,6 +38,7 @@ public:
     glm::mat4 transform;
     glm::mat4 inverseTransform;
     glm::mat4 invTranspose;
+    BoundingBox bb;
 };
 
 struct Material {
@@ -72,6 +77,7 @@ struct PathSegment {
 	glm::vec3 color;
 	int pixelIndex;
 	int remainingBounces;
+    bool intersectWithAABB;
 };
 
 // Use with a corresponding PathSegment to do:
@@ -82,4 +88,5 @@ struct ShadeableIntersection {
   glm::vec3 surfaceNormal;
   int materialId;
   glm::vec3 intersectPoint;
+  bool intersectWithAABB;
 };

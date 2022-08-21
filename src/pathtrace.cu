@@ -76,16 +76,36 @@ static Scene* hst_scene = NULL;
 static glm::vec3* dev_image = NULL;
 static Geom* dev_geoms = NULL;
 static Triangle * dev_tris = NULL;
+static KdTreeNode* dev_treeNodes = NULL;
 static Material* dev_materials = NULL;
 static PathSegment* dev_paths = NULL;
 static ShadeableIntersection* dev_intersections = NULL;
+
+static PathSegment* hst_paths = NULL;
+static ShadeableIntersection* hst_intersections = NULL;
+static int pixelcount = 0;
 // TODO: static variables for device memory, any extra info you need, etc
 // ...
 
+
+void kdTreeIntersectionSingleRayCPU(KdTreeNode* nodes, int num_path, Geom* geoms, int geomIdx, PathSegment* pathSegments, Triangle* tris, ShadeableIntersection* intersections, int nillIdx, Scene* hst_scene, int path_index);
+
+void debug(Scene* scene) {
+	PathSegment ps;
+	ps.ray.direction.x = -0.850967;
+	ps.ray.direction.y = -0.485993;
+	ps.ray.direction.z = -0.199163;
+	ps.ray.origin.x = 0.540807;
+	ps.ray.origin.y = 4.879376;
+	ps.ray.origin.z = 1.215921;
+	//kdTreeIntersectionSingleRayCPU(scene->kdTree->treeNodes.data(), &scene->kdTree->geom, 0, ps, scene->kdTree->tris.data(), -1);
+
+}
 void pathtraceInit(Scene* scene) {
 	hst_scene = scene;
+	//debug(scene);
 	const Camera& cam = hst_scene->state.camera;
-	const int pixelcount = cam.resolution.x * cam.resolution.y;
+	pixelcount = cam.resolution.x * cam.resolution.y;
 
 	cudaMalloc(&dev_image, pixelcount * sizeof(glm::vec3));
 	cudaMemset(dev_image, 0, pixelcount * sizeof(glm::vec3));
@@ -95,8 +115,11 @@ void pathtraceInit(Scene* scene) {
 	cudaMalloc(&dev_geoms, scene->geoms.size() * sizeof(Geom));
 	cudaMemcpy(dev_geoms, scene->geoms.data(), scene->geoms.size() * sizeof(Geom), cudaMemcpyHostToDevice);
 
-	cudaMalloc(&dev_tris, scene->tris[0].size() * sizeof(Triangle));
-	cudaMemcpy(dev_tris, scene->tris[0].data(), scene->tris[0].size() * sizeof(Triangle), cudaMemcpyHostToDevice);
+	cudaMalloc(&dev_tris, scene->kdTree->tris.size() * sizeof(Triangle));
+	cudaMemcpy(dev_tris, scene->kdTree->tris.data(), scene->kdTree->tris.size() * sizeof(Triangle), cudaMemcpyHostToDevice);
+
+	cudaMalloc(&dev_treeNodes, scene->kdTree->treeNodes.size() * sizeof(KdTreeNode));
+	cudaMemcpy(dev_treeNodes, scene->kdTree->treeNodes.data(), scene->kdTree->treeNodes.size() * sizeof(KdTreeNode), cudaMemcpyHostToDevice);
 
 	cudaMalloc(&dev_materials, scene->materials.size() * sizeof(Material));
 	cudaMemcpy(dev_materials, scene->materials.data(), scene->materials.size() * sizeof(Material), cudaMemcpyHostToDevice);
@@ -105,7 +128,8 @@ void pathtraceInit(Scene* scene) {
 	cudaMemset(dev_intersections, 0, pixelcount * sizeof(ShadeableIntersection));
 
 	// TODO: initialize any extra device memeory you need
-
+	hst_paths = new PathSegment[pixelcount * sizeof(PathSegment)];
+	hst_intersections = new ShadeableIntersection[pixelcount * sizeof(ShadeableIntersection)];
 	checkCUDAError("pathtraceInit");
 }
 
@@ -114,10 +138,12 @@ void pathtraceFree() {
 	cudaFree(dev_paths);
 	cudaFree(dev_geoms);
 	cudaFree(dev_tris);
+	cudaFree(dev_treeNodes);
 	cudaFree(dev_materials);
 	cudaFree(dev_intersections);
 	// TODO: clean up any extra device memory you created
-
+	free(hst_paths);
+	free(hst_intersections);
 	checkCUDAError("pathtraceFree");
 }
 
@@ -158,6 +184,7 @@ __global__ void kdTreeIntersection(KdTreeNode* nodes, int num_path, Geom* geoms,
 	__shared__ int currNodes[BLOCK_SIZE_1D];
 	__shared__ int array[BLOCK_SIZE_1D / 2];
 	int& currentN = currNodes[threadIdx.x];
+	currentN = 0;
 	int& traversedN = array[0];
 	traversedN = 0;
 	if (path_index >= num_path)
@@ -165,12 +192,19 @@ __global__ void kdTreeIntersection(KdTreeNode* nodes, int num_path, Geom* geoms,
 
 	PathSegment& pathSegment = pathSegments[path_index];
 	float t_entry, t_exit;
-	if (!intersectAABB(pathSegment.ray, nodes[currentN], t_entry, t_exit))
-		return;
+
+	glm::vec3 ro = multiplyMV(geoms[geomIdx].inverseTransform, glm::vec4(pathSegment.ray.origin, 1.0f));
+	glm::vec3 rd = glm::normalize(multiplyMV(geoms[geomIdx].inverseTransform, glm::vec4(pathSegment.ray.direction, 0.0f)));
+
+	Ray rt;
+	rt.origin = ro;
+	rt.direction = rd;
+
+	intersectAABB(rt, nodes[0].bb, t_entry, t_exit);
 
 	glm::vec3 p_entry, p_exit;
-	p_entry = getPointOnRay(pathSegment.ray, t_entry);
-	p_exit = getPointOnRay(pathSegment.ray, t_exit);
+	p_entry = getPointOnRay(rt, t_entry);
+	p_exit = getPointOnRay(rt, t_exit);
 
 	float t = intersections[path_index].t;;
 	glm::vec3 intersect_point;
@@ -179,7 +213,7 @@ __global__ void kdTreeIntersection(KdTreeNode* nodes, int num_path, Geom* geoms,
 	int hit_geom_index = -1;
 	bool outside = true;
 
-
+	
 	while (true) {
 		//check currNode is done
 		if (t_entry >= t_exit)
@@ -191,45 +225,53 @@ __global__ void kdTreeIntersection(KdTreeNode* nodes, int num_path, Geom* geoms,
 		if (threadIdx.x < stride)
 			array[threadIdx.x] = idxMax(currNodes[threadIdx.x], currNodes[threadIdx.x + stride]);
 		__syncthreads();
-		for (int stride = stride / 2; stride >= 1; stride /= 2) {
+		for (stride = BLOCK_SIZE_1D / 4; stride >= 1; stride /= 2) {
 			if (threadIdx.x < stride)
 				array[threadIdx.x] = idxMax(array[threadIdx.x], array[threadIdx.x + stride]);
 			__syncthreads();
 		}
-
+		
 		//end condition
 		if (traversedN == nillIdx)
 			break;
 
 		//down traversal loop
-		while (true) {
-			if (nodes[traversedN].isLeaf)
-				break;
-
+		while (!nodes[traversedN].isLeaf) {
 			//update currentN
+			int flag = 0;
 			if (currentN == traversedN) {
-				if (onLeft(p_entry, nodes[currentN]))
+				if (onLeft(p_entry, nodes[currentN])) {
 					currentN = nodes[currentN].leftNodeIdx;
-				else
+					flag = 1;
+				}
+				else {
 					currentN = nodes[currentN].rightNodeIdx;
+					flag = -1;
+				}
+					
 			}
 
 			//update traversedN
 			__syncthreads();
-			traversedN = nodes[traversedN].leftNodeIdx;
-
+			if (flag != 0) {
+				traversedN = currentN;
+			}
+			__syncthreads();
+				
+			
 		}
-
 		//intersect
 		if (currentN == traversedN) {
 			glm::vec3 tmp_intersect;
 			glm::vec3 tmp_normal;
 			bool outside = true;
+			
 			for (int i = 0; i < nodes[currentN].triCount; i++) {
 				int triIdx = i + nodes[currentN].triStartIdx;
 				auto tri = tris[triIdx];
 				t = triangleIntersectionTest(geoms[geomIdx], tri, pathSegment.ray, tmp_intersect, tmp_normal, outside);
-				if (t > 0.0f && t_min > t)
+				
+				if ((t > 0.0f && t_min > t) || t_min == -1)
 				{
 					t_min = t;
 					hit_geom_index = geomIdx;
@@ -239,10 +281,233 @@ __global__ void kdTreeIntersection(KdTreeNode* nodes, int num_path, Geom* geoms,
 
 			}
 
-			intersectAABB(pathSegment.ray, nodes[currentN], t_entry, t_exit);
-			p_entry = getPointOnRay(pathSegment.ray, t_entry);
-			p_exit = getPointOnRay(pathSegment.ray, t_exit);
+			intersectAABB(rt, nodes[currentN].bb, t_entry, t_exit);
+			p_entry = getPointOnRay(rt, t_entry);
+			p_exit = getPointOnRay(rt, t_exit);
 			currentN = getNeighborIdx(p_exit, nodes[currentN]);
+		}
+	}
+
+
+	if (hit_geom_index != -1) {
+		intersections[path_index].t = t_min;
+		intersections[path_index].materialId = geoms[hit_geom_index].materialid;
+		intersections[path_index].surfaceNormal = normal;
+		intersections[path_index].intersectPoint = intersect_point;
+	}
+}
+
+__global__ void kdTreeIntersectionSingleRay(KdTreeNode* nodes, int num_path, Geom* geoms, int geomIdx, PathSegment* pathSegments, Triangle* tris, ShadeableIntersection* intersections, int nillIdx) {
+	int path_index = blockIdx.x * blockDim.x + threadIdx.x;
+	if (path_index > num_path)
+		return;
+
+	PathSegment& pathSegment = pathSegments[path_index];
+	int currNode = 0;
+	float t_entry, t_exit;
+
+	glm::vec3 ro = multiplyMV(geoms[geomIdx].inverseTransform, glm::vec4(pathSegment.ray.origin, 1.0f));
+	glm::vec3 rd = glm::normalize(multiplyMV(geoms[geomIdx].inverseTransform, glm::vec4(pathSegment.ray.direction, 0.0f)));
+
+	Ray rt;
+	rt.origin = ro;
+	rt.direction = rd;
+
+	if (!intersectAABB(rt, nodes[0].bb, t_entry, t_exit))
+		return;
+
+	glm::vec3 p_entry, p_exit;
+
+	float t = intersections[path_index].t;;
+	glm::vec3 intersect_point;
+	glm::vec3 normal;
+	float t_min = t;
+	int hit_geom_index = -1;
+	bool outside = true;
+	int count = 0;
+	while (t_entry < t_exit && currNode != -1 && count < 20) {
+		count++;
+		p_entry = getPointOnRay(rt, t_entry);
+		while (!nodes[currNode].isLeaf) {
+			if (onLeft(p_entry, nodes[currNode]))
+				currNode = nodes[currNode].leftNodeIdx;
+			else
+				currNode = nodes[currNode].rightNodeIdx;
+		}
+
+
+		glm::vec3 tmp_intersect;
+		glm::vec3 tmp_normal;
+		bool outside = true;
+
+		for (int i = 0; i < nodes[currNode].triCount; i++) {
+			int triIdx = i + nodes[currNode].triStartIdx;
+			auto tri = tris[triIdx];
+			t = triangleIntersectionTest(geoms[geomIdx], tri, pathSegment.ray, tmp_intersect, tmp_normal, outside);
+
+			if ((t > 0.0f && t_min > t) || t_min == -1)
+			{
+				t_min = t;
+				hit_geom_index = geomIdx;
+				intersect_point = tmp_intersect;
+				normal = tmp_normal;
+			}
+
+		}
+
+		float temp_t = 0;
+		intersectAABB(rt, nodes[currNode].bb, temp_t, t_entry);
+		
+		p_exit = getPointOnRay(rt, t_entry);
+		currNode = getNeighborIdx(p_exit, nodes[currNode]);
+	}
+
+	if (hit_geom_index != -1) {
+		intersections[path_index].t = t_min;
+		intersections[path_index].materialId = geoms[hit_geom_index].materialid;
+		intersections[path_index].surfaceNormal = normal;
+		intersections[path_index].intersectPoint = intersect_point;
+	}
+}
+
+void kdTreeIntersectionSingleRayCPU(KdTreeNode* nodes, int num_path, Geom* geoms, int geomIdx, PathSegment * pathSegments, Triangle* tris, ShadeableIntersection* intersections, int nillIdx, Scene * hst_scene, int path_index) {
+	if (path_index > num_path)
+		return;
+
+	PathSegment& pathSegment = pathSegments[path_index];
+	int currNode = 0;
+	float t_entry, t_exit;
+
+	glm::vec3 ro = multiplyMV(geoms[geomIdx].inverseTransform, glm::vec4(pathSegment.ray.origin, 1.0f));
+	glm::vec3 rd = glm::normalize(multiplyMV(geoms[geomIdx].inverseTransform, glm::vec4(pathSegment.ray.direction, 0.0f)));
+
+	Ray rt;
+	rt.origin = ro;
+	rt.direction = rd;
+
+	if (!intersectAABB(rt, nodes[0].bb, t_entry, t_exit))
+		return;
+
+	glm::vec3 p_entry, p_exit;
+
+	float t = intersections[path_index].t;;
+	glm::vec3 intersect_point;
+	glm::vec3 normal;
+	float t_min = t;
+	int hit_geom_index = -1;
+	bool outside = true;
+
+	int count = 0;
+
+	while (t_entry < t_exit && currNode != -1) {
+		count++;
+		printf("%d\n", count);
+		p_entry = getPointOnRay(rt, t_entry);
+		while (!nodes[currNode].isLeaf) {
+			if (onLeft(p_entry, nodes[currNode]))
+				currNode = nodes[currNode].leftNodeIdx;
+			else
+				currNode = nodes[currNode].rightNodeIdx;
+		}
+
+
+		glm::vec3 tmp_intersect;
+		glm::vec3 tmp_normal;
+		bool outside = true;
+
+		for (int i = 0; i < nodes[currNode].triCount; i++) {
+			int triIdx = i + nodes[currNode].triStartIdx;
+			auto tri = tris[triIdx];
+			t = triangleIntersectionTest(geoms[geomIdx], tri, pathSegment.ray, tmp_intersect, tmp_normal, outside);
+
+			if ((t > 0.0f && t_min > t) || t_min == -1)
+			{
+				t_min = t;
+				hit_geom_index = geomIdx;
+				intersect_point = tmp_intersect;
+				normal = tmp_normal;
+			}
+
+		}
+
+		float temp_t = 0;
+		intersectAABB(rt, nodes[currNode].bb, temp_t, t_entry);
+
+		p_exit = getPointOnRay(rt, t_entry);
+		currNode = getNeighborIdx(p_exit, nodes[currNode]);
+	}
+
+	if (hit_geom_index != -1) {
+		intersections[path_index].t = t_min;
+		intersections[path_index].materialId = geoms[hit_geom_index].materialid;
+		intersections[path_index].surfaceNormal = normal;
+		intersections[path_index].intersectPoint = intersect_point;
+	}
+	else {
+		for (int i = 0; i < hst_scene->kdTree->tris.size(); i++) {
+			glm::vec3 tmp_intersect;
+			glm::vec3 tmp_normal;
+			bool outside = true;
+			t = triangleIntersectionTest(geoms[geomIdx], tris[i], pathSegment.ray, tmp_intersect, tmp_normal, outside);
+
+			if ((t > 0.0f && t_min > t) || t_min == -1)
+			{
+				t_min = t;
+				hit_geom_index = geomIdx;
+				intersect_point = tmp_intersect;
+				normal = tmp_normal;
+			}
+		}
+		
+		if (hit_geom_index != -1) {
+			intersections[path_index].t = t_min;
+			intersections[path_index].materialId = geoms[hit_geom_index].materialid;
+			intersections[path_index].surfaceNormal = normal;
+			intersections[path_index].intersectPoint = intersect_point;
+		}
+	}
+}
+
+__global__ void kdTreeIntersectionNaive(KdTreeNode* nodes, int num_path, Geom* geoms, int geomIdx, PathSegment* pathSegments, Triangle* tris, int num_tri, ShadeableIntersection* intersections, int nillIdx) {
+	int path_index = blockIdx.x * blockDim.x + threadIdx.x;
+	if (path_index > num_path)
+		return;
+
+	PathSegment& pathSegment = pathSegments[path_index];
+	int currNode = 0;
+	float t_entry, t_exit;
+
+	glm::vec3 ro = multiplyMV(geoms[geomIdx].inverseTransform, glm::vec4(pathSegment.ray.origin, 1.0f));
+	glm::vec3 rd = glm::normalize(multiplyMV(geoms[geomIdx].inverseTransform, glm::vec4(pathSegment.ray.direction, 0.0f)));
+
+	Ray rt;
+	rt.origin = ro;
+	rt.direction = rd;
+
+	if (!intersectAABB(rt, nodes[0].bb, t_entry, t_exit))
+		return;
+
+	glm::vec3 p_entry, p_exit;
+
+	float t = intersections[path_index].t;
+	glm::vec3 intersect_point;
+	glm::vec3 normal;
+	float t_min = t;
+	int hit_geom_index = -1;
+	bool outside = true;
+
+	for (int i = 0; i < num_tri; i++) {
+		glm::vec3 tmp_intersect;
+		glm::vec3 tmp_normal;
+		bool outside = true;
+		t = triangleIntersectionTest(geoms[geomIdx], tris[i], pathSegment.ray, tmp_intersect, tmp_normal, outside);
+
+		if ((t > 0.0f && t_min > t) || t_min == -1)
+		{
+			t_min = t;
+			hit_geom_index = geomIdx;
+			intersect_point = tmp_intersect;
+			normal = tmp_normal;
 		}
 	}
 
@@ -263,8 +528,6 @@ __global__ void computeIntersections(
 	, int num_paths
 	, PathSegment* pathSegments
 	, Geom* geoms
-	, Triangle * tris
-	, int tris_size
 	, int geoms_size
 	, ShadeableIntersection* intersections
 )
@@ -294,22 +557,24 @@ __global__ void computeIntersections(
 			if (geom.type == CUBE)
 			{
 				t = boxIntersectionTest(geom, pathSegment.ray, tmp_intersect, tmp_normal, outside);
+				//t = -1;
 			}
 			else if (geom.type == SPHERE)
 			{
 				t = sphereIntersectionTest(geom, pathSegment.ray, tmp_intersect, tmp_normal, outside);
+				//t = -1;
 			}
 			else if (geom.type == OBJECT) {
-				for (int j = 0; j < tris_size; j++) {
-					t = triangleIntersectionTest(geom, tris[j], pathSegment.ray, tmp_intersect, tmp_normal, outside);
-					if (t > 0.0f && t_min > t)
-					{
-						t_min = t;
-						hit_geom_index = i;
-						intersect_point = tmp_intersect;
-						normal = tmp_normal;
-					}
-				}
+				glm::vec3 ro = multiplyMV(geom.inverseTransform, glm::vec4(pathSegment.ray.origin, 1.0f));
+				glm::vec3 rd = glm::normalize(multiplyMV(geom.inverseTransform, glm::vec4(pathSegment.ray.direction, 0.0f)));
+
+				Ray rt;
+				rt.origin = ro;
+				rt.direction = rd;
+				float t1, t2;
+				bool aabb = intersectAABB(rt, geom.bb, t1, t2);
+				pathSegments[path_index].intersectWithAABB = aabb;
+				intersections[path_index].intersectWithAABB = aabb;
 			}
 			// TODO: add more intersection tests here... triangle? metaball? CSG?
 
@@ -474,6 +739,18 @@ struct is_complete {
 	}
 };
 
+struct is_aabb_path {
+	__host__ __device__ bool operator() (const PathSegment& p) {
+		return p.intersectWithAABB;
+	}
+};
+
+struct is_aabb_inter {
+	__host__ __device__ bool operator() (const ShadeableIntersection& p) {
+		return p.intersectWithAABB;
+	}
+};
+
 /**
  * Wrapper for the __global__ call that sets up the kernel calls and does a ton
  * of memory management
@@ -551,12 +828,30 @@ void pathtrace(uchar4* pbo, int frame, int iter) {
 			, num_paths
 			, dev_paths
 			, dev_geoms
-			, dev_tris
-			, hst_scene->tris[0].size()
 			, hst_scene->geoms.size()
 			, dev_intersections
 			);
 		checkCUDAError("trace one bounce");
+		
+		PathSegment* new_end_path = thrust::partition(thrust::device, dev_paths, dev_paths + num_paths, is_aabb_path());
+		thrust::partition(thrust::device, dev_intersections, dev_intersections + num_paths, is_aabb_inter());
+		int num_paths_aabb = new_end_path - dev_paths;
+		dim3 numblocksAABB = (num_paths_aabb + blockSize1d - 1) / blockSize1d;
+		/*
+		cudaMemcpy(hst_paths, dev_paths, pixelcount * sizeof(PathSegment), cudaMemcpyDeviceToHost);
+		cudaMemcpy(hst_intersections, dev_intersections, pixelcount * sizeof(ShadeableIntersection), cudaMemcpyDeviceToHost);
+
+		for (int i = 0; i < pixelcount; i++) {
+			kdTreeIntersectionSingleRayCPU(hst_scene->kdTree->treeNodes.data(), num_paths_aabb, &hst_scene->kdTree->geom, 0, hst_paths, hst_scene->kdTree->tris.data(), hst_intersections, -1, hst_scene, i);
+		}
+		//kdTreeIntersectionSingleRay << <numblocksAABB, blockSize1d >> > (dev_treeNodes, num_paths_aabb, dev_geoms, 6, dev_paths, dev_tris, dev_intersections, -1);
+
+		cudaMemcpy(dev_paths, hst_paths, pixelcount * sizeof(PathSegment), cudaMemcpyHostToDevice);
+		cudaMemcpy(dev_intersections, hst_intersections, pixelcount * sizeof(ShadeableIntersection), cudaMemcpyHostToDevice);*/
+		
+		kdTreeIntersectionSingleRay << <numblocksAABB, blockSize1d >> > (dev_treeNodes, num_paths_aabb, dev_geoms, 6, dev_paths, dev_tris, dev_intersections, -1);
+		//kdTreeIntersection << <numblocksAABB, blockSize1d >> > (dev_treeNodes, num_paths_aabb, dev_geoms, 6, dev_paths, dev_tris, dev_intersections, -1);
+		checkCUDAError("kd kernel");
 		cudaDeviceSynchronize();
 		depth++;
 		printf("compute intersection done\n");

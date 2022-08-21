@@ -37,77 +37,8 @@ Scene::Scene(string filename) {
 }
 
 int Scene::loadObj(string inputfile) {
-    tinyobj::ObjReaderConfig reader_config;
-    reader_config.mtl_search_path = "./"; // Path to material files
-
-    tinyobj::ObjReader reader;
-
-    if (!reader.ParseFromFile(inputfile, reader_config)) {
-        if (!reader.Error().empty()) {
-            std::cerr << "TinyObjReader: " << reader.Error();
-        }
-        exit(1);
-    }
-
-    if (!reader.Warning().empty()) {
-        std::cout << "TinyObjReader: " << reader.Warning();
-    }
-
-    auto& attrib = reader.GetAttrib();
-    auto& shapes = reader.GetShapes();
-    auto& materials = reader.GetMaterials();
-
-    this->geoms.push_back(Geom());
-    this->tris.push_back(std::vector<Triangle>());
-    
-    std::vector<Triangle>& tris = this->tris.back();
-    Geom& obj = this->geoms.back();
-    
-    obj.type = OBJECT;
-    obj.materialid = 3;
-    obj.translation.x = 1.0f;
-    obj.translation.y = 5.0f;
-    obj.translation.z = 2.0f;
-    obj.rotation.x = 0.0f;
-    obj.rotation.y = 0.0f;
-    obj.rotation.z = 0.0f;
-    obj.scale.x = 0.02f;
-    obj.scale.y = 0.02f;
-    obj.scale.z = 0.02f;
-    obj.transform = utilityCore::buildTransformationMatrix(
-        obj.translation, obj.rotation, obj.scale);
-    obj.inverseTransform = glm::inverse(obj.transform);
-    obj.invTranspose = glm::inverseTranspose(obj.transform);
-
-
-    // Loop over shapes
-    for (size_t s = 0; s < shapes.size(); s++) {
-        // Loop over faces(polygon)
-        size_t index_offset = 0;
-        for (size_t f = 0; f < shapes[s].mesh.num_face_vertices.size(); f++) {
-            size_t fv = size_t(shapes[s].mesh.num_face_vertices[f]);
-
-            Triangle tri;
-            
-            // Loop over vertices in the face.
-            for (size_t v = 0; v < fv; v++) {
-                // access to vertex
-                tinyobj::index_t idx = shapes[s].mesh.indices[index_offset + v];
-
-                glm::vec3 & vertex = tri.v[v];
-                vertex.x = attrib.vertices[3 * size_t(idx.vertex_index) + 0];
-                vertex.y = attrib.vertices[3 * size_t(idx.vertex_index) + 1];
-                vertex.z = attrib.vertices[3 * size_t(idx.vertex_index) + 2];
-            }
-
-            glm::vec3 edge1 = tri.v[0] - tri.v[1];
-            glm::vec3 edge2 = tri.v[1] - tri.v[2];
-            tri.normal = glm::normalize(glm::cross(edge1, edge2));
-            tris.push_back(tri);
-            index_offset += fv;
-        }
-    }
-
+    this->kdTree = new KdTree(inputfile);
+    this->geoms.push_back(this->kdTree->geom);
     return 0;
 }
 

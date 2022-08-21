@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
 
     // Load scene file
     scene = new Scene(sceneFile);
-    scene->loadObj("./objects/diamond.obj");
+    scene->loadObj("./objects/violin.obj");
 
     // Set up camera stuff from loaded path tracer settings
     iteration = 0;

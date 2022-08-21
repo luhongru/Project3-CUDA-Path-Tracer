@@ -4,12 +4,14 @@
 #include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtx/string_cast.hpp>
 
+constexpr int TRI_COUNT_UPPER_BOUND = 20;
+
 KdTree::KdTree(std::string filename) {
 	std::vector<Triangle> tri_data;
 	readTriData(filename, tri_data);
-	setTreeGeom();
 	constructTree(tri_data);
 	connectRopes();
+	setTreeGeom();
 }
 
 KdTree::~KdTree() {}
@@ -54,8 +56,8 @@ void KdTree::readTriData(std::string filename, std::vector<Triangle>& tri_data) 
 				vertex.z = attrib.vertices[3 * size_t(idx.vertex_index) + 2];
 			}
 
-			glm::vec3 edge1 = tri.v[0] - tri.v[1];
-			glm::vec3 edge2 = tri.v[1] - tri.v[2];
+			glm::vec3 edge1 = tri.v[1] - tri.v[0];
+			glm::vec3 edge2 = tri.v[2] - tri.v[0];
 			tri.normal = glm::normalize(glm::cross(edge1, edge2));
 			tri_data.push_back(tri);
 			index_offset += fv;
@@ -66,26 +68,27 @@ void KdTree::readTriData(std::string filename, std::vector<Triangle>& tri_data) 
 void KdTree::setTreeGeom() {
 	//hard code geom info
 	geom.type = OBJECT;
-	geom.materialid = 3;
-	geom.translation.x = 1.0f;
-	geom.translation.y = 5.0f;
-	geom.translation.z = 2.0f;
+	geom.materialid = 5;
+	geom.translation.x = 0.0f;
+	geom.translation.y = 4.5f;
+	geom.translation.z = 4.0f;
 	geom.rotation.x = 0.0f;
-	geom.rotation.y = 0.0f;
-	geom.rotation.z = 0.0f;
-	geom.scale.x = 0.02f;
-	geom.scale.y = 0.02f;
-	geom.scale.z = 0.02f;
+	geom.rotation.y = 40.0f;
+	geom.rotation.z = 70.0f;
+	geom.scale.x = 1.6f;
+	geom.scale.y = 1.6f;
+	geom.scale.z = 1.6f;
 	geom.transform = utilityCore::buildTransformationMatrix(
 		geom.translation, geom.rotation, geom.scale);
 	geom.inverseTransform = glm::inverse(geom.transform);
 	geom.invTranspose = glm::inverseTranspose(geom.transform);
+	geom.bb = treeNodes[0].bb;
 }
 
 void setSplitPlane(KdTreeNode& node) {
 	float xLength = node.bb.max.x - node.bb.min.x;
-	float yLength = node.bb.max.x - node.bb.min.x;
-	float zLength = node.bb.max.x - node.bb.min.x;
+	float yLength = node.bb.max.y - node.bb.min.y;
+	float zLength = node.bb.max.z - node.bb.min.z;
 
 	if (xLength >= yLength && xLength >= zLength) {
 		node.split_plane_axis = X_AXIS;
@@ -104,6 +107,7 @@ void setSplitPlane(KdTreeNode& node) {
 		node.split_plane_value = (node.bb.max.z + node.bb.min.z) / 2;
 		return;
 	}
+	assert(node.split_plane_axis == X_AXIS || node.split_plane_axis == Y_AXIS || node.split_plane_axis == Z_AXIS);
 }
 
 BoundingBox getChildBoundingBox(KdTreeNode& parentNode, bool left) {
@@ -124,7 +128,7 @@ BoundingBox getChildBoundingBox(KdTreeNode& parentNode, bool left) {
 
 		return bb;
 	}
-	if (parentNode.split_plane_axis == X_AXIS) {
+	if (parentNode.split_plane_axis == Z_AXIS) {
 		if (left)
 			bb.max.z = parentNode.split_plane_value;
 		else
@@ -184,6 +188,26 @@ void KdTree::constructTree(std::vector<Triangle> &tri_data_array) {
 		tri_idx_array_of_nodes[0].push_back(i);
 	}
 
+	{
+		KdTreeNode node;
+		node.isLeaf = true;
+		node.bb.min = tri_data_array[0].v[0];
+		node.bb.max = tri_data_array[0].v[0];
+		for (auto idx : tri_idx_array_of_nodes[0]) {
+			for (int i = 0; i < 3; i++) {
+				glm::vec3 v = tri_data_array[idx].v[i];
+				node.bb.max.x = std::max(node.bb.max.x, v.x);
+				node.bb.max.y = std::max(node.bb.max.y, v.y);
+				node.bb.max.z = std::max(node.bb.max.z, v.z);
+
+				node.bb.min.x = std::min(node.bb.min.x, v.x);
+				node.bb.min.y = std::min(node.bb.min.y, v.y);
+				node.bb.min.z = std::min(node.bb.min.z, v.z);
+			}
+		}
+		treeNodes.push_back(node);
+	}
+	
 	//begin contructing
 	for (int i = 0; i < treeNodes.size(); i++) {
 		auto& node = treeNodes[i];
@@ -230,7 +254,7 @@ void KdTree::constructTree(std::vector<Triangle> &tri_data_array) {
 		tri_idx_array_of_nodes.push_back(leftNode_tri_idx_array);
 		tri_idx_array_of_nodes.push_back(rightNode_tri_idx_array);
 
-		tri_idx_array.clear();
+		//tri_idx_array.clear();
 	}
 
 	assert(treeNodes.size() == tri_idx_array_of_nodes.size());
@@ -268,12 +292,12 @@ void KdTree::connectRopeRec(int nodeIdx, int neighbor_node_indices[6]) {
 		sr = RIGHT;
 	}
 	if (node.split_plane_axis == Y_AXIS) {
-		sl = FRONT;
-		sr = BACK;
+		sl = BACK;
+		sr = FRONT;
 	}
-	if (node.split_plane_axis == X_AXIS) {
-		sl = TOP;
-		sr = BOTTOM;
+	if (node.split_plane_axis == Z_AXIS) {
+		sl = BOTTOM;
+		sr = TOP;
 	}
 
 	float v = node.split_plane_value;
